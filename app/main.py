@@ -225,12 +225,42 @@ async def api_extract_dna(handle: str, user: auth.User = Depends(auth.require_us
     log.info(f"extract DNA @{handle} by {user.email}")
     try:
         dna = await generator.extract_brand_dna(client, handle)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"@{handle} not scraped yet")
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         log.exception("DNA extraction failed")
         raise HTTPException(status_code=500, detail=f"DNA extraction failed: {e}")
     return dna
+
+
+@app.get("/api/brand/{handle}/files")
+def api_brand_files(handle: str, user: auth.User = Depends(auth.require_user)):
+    """Diagnostic — what's actually on disk for this brand."""
+    try:
+        handle = storage.normalize_handle(handle)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    bdir = storage.brand_dir(handle)
+    if not bdir.exists():
+        return {
+            "data_root": str(storage.DATA_ROOT),
+            "brand_dir": str(bdir),
+            "exists": False,
+            "files": [],
+        }
+    files = []
+    for f in sorted(bdir.rglob("*")):
+        if f.is_file():
+            files.append({
+                "path": str(f.relative_to(bdir)).replace("\\", "/"),
+                "size": f.stat().st_size,
+            })
+    return {
+        "data_root": str(storage.DATA_ROOT),
+        "brand_dir": str(bdir),
+        "exists": True,
+        "files": files,
+    }
 
 
 # ── Static file serving ──

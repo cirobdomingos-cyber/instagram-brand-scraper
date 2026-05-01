@@ -141,6 +141,14 @@ async def extract_brand_dna(client: AsyncAnthropic, handle: str) -> dict:
     selected images, parses the returned JSON, caches it to brand_dna.json.
     """
     bdir = storage.brand_dir(handle)
+    if not bdir.exists():
+        raise FileNotFoundError(f"brand folder missing: {bdir}")
+    for fname in ("profile.json", "posts.json", "manifest.json"):
+        if not (bdir / fname).exists():
+            raise FileNotFoundError(
+                f"{fname} missing for @{handle} (looked in {bdir}). "
+                f"Re-scrape to regenerate."
+            )
     profile = storage.read_json(bdir / "profile.json")
     posts = storage.read_json(bdir / "posts.json")
     manifest = storage.read_json(bdir / "manifest.json")
