@@ -459,7 +459,7 @@ function renderBrand(handle, data) {
         try {
           const dna = await API.extractDna(handle);
           state.currentBrand.brand_dna = dna;
-          renderDna(dnaCard.querySelector("[data-dna]"), dna);
+          renderDna(dnaCard.querySelector("[data-dna]"), dna, handle);
         } catch (e) {
           dnaCard.querySelector("[data-dna]").innerHTML = `<p class="text-red-600 text-sm">${e.message}</p>`;
         }
@@ -467,7 +467,7 @@ function renderBrand(handle, data) {
     }, brand_dna ? "re-extract" : "extract"),
   ]));
   const dnaBody = h("div", { "data-dna": "" });
-  if (brand_dna) renderDna(dnaBody, brand_dna);
+  if (brand_dna) renderDna(dnaBody, brand_dna, handle);
   else dnaBody.appendChild(h("p", { class: "text-slate-500 text-sm" },
     "Not extracted yet. Click 'extract' or generate any asset (it'll auto-extract)."));
   dnaCard.appendChild(dnaBody);
@@ -636,7 +636,7 @@ function galleryThumb(handle, img) {
   return wrap;
 }
 
-function renderDna(host, dna) {
+function renderDna(host, dna, handle) {
   host.innerHTML = "";
   const v = dna.visual_system || {};
   const colors = (v.dominant_colors_hex || []).map(c => h("span", {
@@ -653,6 +653,31 @@ function renderDna(host, dna) {
     h("div", { class: "text-xs text-slate-500" }, "POSITIONING"),
     h("div", { class: "text-sm" }, (dna.identity || {}).positioning_one_liner || "—"),
   ]));
+
+  if (handle) {
+    const mdHost = h("div", { class: "mt-2 prose prose-sm max-w-none border rounded p-4 bg-slate-50 text-sm" },
+      [h("p", { class: "text-slate-500" }, "Loading rendered markdown…")]);
+    const mdDetails = h("details", { class: "mt-2", open: true }, [
+      h("summary", { class: "text-xs text-slate-500 cursor-pointer hover:text-slate-900" }, [
+        "rendered (BRAND_DNA.md) ",
+        h("a", {
+          href: `/data/${encodeURIComponent(handle)}/BRAND_DNA.md`,
+          target: "_blank",
+          class: "text-blue-600 hover:underline",
+          onclick: (e) => e.stopPropagation(),
+        }, "open raw ↗"),
+      ]),
+      mdHost,
+    ]);
+    host.appendChild(mdDetails);
+    fetch(`/data/${encodeURIComponent(handle)}/BRAND_DNA.md`, { credentials: "same-origin" })
+      .then(r => r.ok ? r.text() : Promise.reject(new Error(`${r.status}`)))
+      .then(md => { mdHost.innerHTML = mdToHtml(md); })
+      .catch(() => {
+        mdHost.innerHTML = '<p class="text-xs text-slate-500">Markdown not on disk yet — re-extract to generate it.</p>';
+      });
+  }
+
   const pre = h("pre", {
     class: "bg-slate-50 border rounded p-3 text-xs overflow-x-auto scrollbar-thin",
   }, JSON.stringify(dna, null, 2));

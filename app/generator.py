@@ -206,6 +206,15 @@ async def extract_brand_dna(client: AsyncAnthropic, handle: str) -> dict:
         raise RuntimeError(f"Claude returned invalid BRAND_DNA JSON: {e}\n{raw[:500]}")
 
     storage.write_json(bdir / "brand_dna.json", dna)
+    # Persist a human-readable rendering alongside the JSON so the SPA
+    # can link to it directly and download bundles always have a current
+    # markdown version. Cheap to regen — keeps it in sync with the JSON.
+    try:
+        (bdir / "BRAND_DNA.md").write_text(
+            dna_to_markdown(dna, handle=handle), encoding="utf-8"
+        )
+    except Exception:
+        pass
     return dna
 
 
