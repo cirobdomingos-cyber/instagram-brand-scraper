@@ -178,6 +178,16 @@ function mountGoogleButton(host) {
 
 async function renderHome() {
   const wrapper = h("div", {});
+  if (state.config?.data_root_ephemeral) {
+    wrapper.appendChild(h("div", {
+      class: "bg-amber-50 border border-amber-300 text-amber-900 rounded-lg p-3 mb-4 text-sm",
+    }, [
+      h("div", { class: "font-semibold mb-1" }, "⚠ Storage is ephemeral"),
+      h("div", { class: "text-xs" },
+        `DATA_ROOT=${state.config.data_root} — scraped data will be wiped on the next redeploy. ` +
+        `On Railway: mount a volume at /data and set the DATA_ROOT env var to /data.`),
+    ]));
+  }
   wrapper.appendChild(renderScrapeCard());
   wrapper.appendChild(h("h2", { class: "text-sm uppercase tracking-wide text-slate-500 mt-8 mb-3" }, "Brands"));
   const list = h("div", { class: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3" }, [

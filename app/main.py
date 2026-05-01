@@ -49,6 +49,11 @@ app = FastAPI(title="Instagram Brand Scraper", version="0.1.0")
 async def startup():
     storage.DATA_ROOT.mkdir(parents=True, exist_ok=True)
     log.info(f"DATA_ROOT={storage.DATA_ROOT}")
+    if str(storage.DATA_ROOT).startswith("/app") and "DATA_ROOT" not in os.environ:
+        log.warning(
+            "⚠ DATA_ROOT defaults to %s (ephemeral on Railway — data is wiped on redeploy). "
+            "Mount a volume and set DATA_ROOT to its mount path.", storage.DATA_ROOT,
+        )
     log.info(f"auth mode = {'real (Google)' if auth.is_real_mode() else 'mock'}")
     log.info(f"allowed emails: {len(auth._allowed_emails())}")
 
@@ -56,12 +61,24 @@ async def startup():
 # ── public config endpoint — no auth, used by the SPA bootstrap ──
 @app.get("/api/config")
 def api_config():
+    # An ephemeral data root (defaulted, or anywhere under /app on Railway)
+    # means scraped data is wiped on every redeploy. Surface this so the
+    # SPA can show a warning banner.
+    data_root_str = str(storage.DATA_ROOT)
+    data_root_explicit = "DATA_ROOT" in os.environ
+    data_root_ephemeral = (
+        not data_root_explicit
+        or data_root_str.startswith("/app")
+        or data_root_str.startswith(str(HERE.parent))
+    )
     return {
         "google_client_id": auth.GOOGLE_CLIENT_ID or None,
         "mock_mode": not auth.is_real_mode(),
         "allowed_emails_count": len(auth._allowed_emails()),
         "max_posts": MAX_POSTS_PER_SCRAPE,
         "asset_types": list(generator.prompts.ASSET_FORMATS.keys()),
+        "data_root": data_root_str,
+        "data_root_ephemeral": data_root_ephemeral,
     }
 
 
