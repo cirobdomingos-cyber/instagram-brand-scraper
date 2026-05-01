@@ -422,6 +422,19 @@ function renderBrand(handle, data) {
   catCard.appendChild(h("p", { class: "text-xs text-slate-500 mt-2", "data-cat-status": "" }));
   wrapper.appendChild(catCard);
 
+  // Image gallery
+  const galleryCard = h("div", { class: "bg-white rounded-xl shadow p-5 mb-4" }, []);
+  galleryCard.appendChild(h("div", { class: "flex items-center justify-between mb-3" }, [
+    h("h2", { class: "font-semibold" }, "Image gallery"),
+    h("span", { class: "text-xs text-slate-500" }, "click any to open full size"),
+  ]));
+  const galleryHost = h("div", {
+    class: "grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-8 gap-2",
+  });
+  galleryCard.appendChild(galleryHost);
+  loadGallery(handle, galleryHost, !!catalog_summary);
+  wrapper.appendChild(galleryCard);
+
   // BRAND_DNA panel
   const dnaCard = h("div", { class: "bg-white rounded-xl shadow p-5 mb-4" }, []);
   dnaCard.appendChild(h("div", { class: "flex items-center justify-between mb-3" }, [
@@ -478,6 +491,84 @@ function renderBrand(handle, data) {
   }
 
   renderShell(wrapper);
+}
+
+async function loadGallery(handle, host, hasCatalog) {
+  host.innerHTML = '<p class="text-xs text-slate-500 col-span-full">loading…</p>';
+  if (hasCatalog) {
+    try {
+      const r = await fetch(`/data/${encodeURIComponent(handle)}/image_catalog.json`);
+      const cat = await r.json();
+      host.innerHTML = "";
+      const sorted = (cat.images || []).slice().sort((a, b) =>
+        (b.post_likes || 0) - (a.post_likes || 0));
+      for (const img of sorted) {
+        host.appendChild(galleryThumb(handle, img));
+      }
+      if (!sorted.length) {
+        host.innerHTML = '<p class="text-xs text-slate-500 col-span-full">catalog has no entries — try re-cataloging</p>';
+      }
+    } catch (e) {
+      host.innerHTML = `<p class="text-xs text-red-600 col-span-full">failed to load catalog: ${e.message}</p>`;
+    }
+    return;
+  }
+  // Fallback when catalog isn't built yet — list image files directly.
+  try {
+    const r = await API._fetch(`/api/brand/${encodeURIComponent(handle)}/files`);
+    host.innerHTML = "";
+    const imgFiles = (r.files || []).filter(f => f.path.startsWith("images/") && f.size > 0);
+    for (const f of imgFiles) {
+      host.appendChild(galleryThumb(handle, {
+        shortcode: f.path.replace("images/", "").replace(".jpg", ""),
+        image_path: f.path,
+      }));
+    }
+    if (!imgFiles.length) {
+      host.innerHTML = '<p class="text-xs text-slate-500 col-span-full">no images yet — re-scrape</p>';
+    }
+  } catch (e) {
+    host.innerHTML = `<p class="text-xs text-red-600 col-span-full">${e.message}</p>`;
+  }
+}
+
+function galleryThumb(handle, img) {
+  const url = `/data/${encodeURIComponent(handle)}/${img.image_path}`;
+  const quality = img.design_quality;
+  const badgeClass = quality === "high"
+    ? "bg-emerald-500" : quality === "low" ? "bg-red-500" : "bg-slate-500";
+  const tooltip = [
+    `@${handle}/${img.shortcode}`,
+    img.subject ? `\n${img.subject}` : "",
+    img.layout ? `\nlayout: ${img.layout}` : "",
+    img.mood ? `\nmood: ${img.mood}` : "",
+    img.post_likes ? `\nlikes: ${img.post_likes}` : "",
+    (img.usable_for || []).length ? `\nusable for: ${img.usable_for.join(", ")}` : "",
+  ].join("");
+  const wrap = h("a", {
+    href: url,
+    target: "_blank",
+    class: "relative block aspect-square overflow-hidden rounded bg-slate-100 group",
+    title: tooltip,
+  }, [
+    h("img", {
+      src: url,
+      class: "w-full h-full object-cover group-hover:scale-105 transition",
+      loading: "lazy",
+    }),
+  ]);
+  if (quality) {
+    wrap.appendChild(h("span", {
+      class: `absolute top-1 right-1 px-1.5 rounded text-[10px] font-bold text-white ${badgeClass}`,
+      title: `design quality: ${quality}`,
+    }, quality.charAt(0).toUpperCase()));
+  }
+  if (img.post_likes) {
+    wrap.appendChild(h("span", {
+      class: "absolute bottom-1 left-1 px-1.5 rounded text-[10px] font-medium text-white bg-black/50",
+    }, `♥ ${img.post_likes.toLocaleString()}`));
+  }
+  return wrap;
 }
 
 function renderDna(host, dna) {
