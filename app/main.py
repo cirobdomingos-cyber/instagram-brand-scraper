@@ -18,14 +18,17 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from anthropic import AsyncAnthropic
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.middleware.sessions import SessionMiddleware
 
 from . import allowlist, auth, cataloger, generator, scraper, storage
 
@@ -44,6 +47,23 @@ MAX_POSTS_PER_SCRAPE = int(os.getenv("MAX_POSTS_PER_SCRAPE", "50"))
 
 app = FastAPI(title="Instagram Brand Scraper", version="0.1.0")
 
+# SECRET_KEY signs session cookies. If unset, generate a random one — the
+# downside is that sessions don't survive a restart (acceptable for portfolio
+# scale; production should set this in Railway env).
+_SECRET_KEY = os.getenv("SECRET_KEY")
+_SECRET_KEY_ENV_SET = bool(_SECRET_KEY)
+if not _SECRET_KEY:
+    _SECRET_KEY = secrets.token_urlsafe(32)
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=_SECRET_KEY,
+    session_cookie="ibs_session",
+    same_site="lax",
+    https_only=False,        # Railway terminates TLS, internal hop is HTTP
+    max_age=7 * 24 * 3600,   # 7 days
+)
+
 
 @app.on_event("startup")
 async def startup():
@@ -53,6 +73,12 @@ async def startup():
         log.warning(
             "⚠ DATA_ROOT defaults to %s (ephemeral on Railway — data is wiped on redeploy). "
             "Mount a volume and set DATA_ROOT to its mount path.", storage.DATA_ROOT,
+        )
+    if not _SECRET_KEY_ENV_SET:
+        log.warning(
+            "⚠ SECRET_KEY not set — generated a random one. "
+            "Sessions will be invalidated on every redeploy. "
+            "Set SECRET_KEY in Railway env to keep users signed in."
         )
     log.info(f"auth mode = {'real (Google)' if auth.is_real_mode() else 'mock'}")
     log.info(f"allowed emails: {len(auth._allowed_emails())}")
@@ -90,6 +116,29 @@ def api_me(user: auth.User = Depends(auth.require_user)):
         "picture": user.picture,
         "is_admin": auth.is_admin(user.email),
     }
+
+
+@app.post("/api/auth/session")
+async def api_session_login(
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+    x_mock_email: Optional[str] = Header(default=None),
+):
+    """Verify credentials, write a session cookie, return user info."""
+    user = await auth.verify_credentials(authorization, x_mock_email)
+    auth.write_session(request, user)
+    return {
+        "email": user.email,
+        "name": user.name,
+        "picture": user.picture,
+        "is_admin": auth.is_admin(user.email),
+    }
+
+
+@app.delete("/api/auth/session")
+async def api_session_logout(request: Request):
+    auth.clear_session(request)
+    return {"ok": True}
 
 
 # ── Admin: allowlist management ──
@@ -368,11 +417,31 @@ def api_brand_files(handle: str, user: auth.User = Depends(auth.require_user)):
 
 
 # ── Static file serving ──
-# /data/<handle>/... — scraped images + generated outputs
-# /static/...        — frontend assets
+# /data/<handle>/... — auth-gated, served via the route below
+# /static/...        — public frontend assets (JS/CSS/HTML)
 # /                  — SPA index
-app.mount("/data", StaticFiles(directory=str(storage.DATA_ROOT), check_dir=False), name="data")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR), check_dir=False), name="static")
+
+
+@app.get("/data/{path:path}")
+def serve_data(path: str, user: auth.User = Depends(auth.require_user)):
+    """
+    Auth-gated file server for everything under DATA_ROOT — scraped images,
+    posts.json, manifests, generated assets. Browser sends the session
+    cookie automatically on <img> requests, so the UI just works.
+
+    Path-traversal-safe: resolves the joined path and refuses anything
+    outside DATA_ROOT.
+    """
+    full = (storage.DATA_ROOT / path).resolve()
+    root = storage.DATA_ROOT.resolve()
+    try:
+        full.relative_to(root)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="path traversal blocked")
+    if not full.is_file():
+        raise HTTPException(status_code=404, detail=f"not found: {path}")
+    return FileResponse(full)
 
 
 @app.get("/")

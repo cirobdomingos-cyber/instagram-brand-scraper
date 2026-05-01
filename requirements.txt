@@ -6,3 +6,4 @@ pydantic>=2.6
 anthropic>=0.40
 google-auth>=2.30
 requests>=2.31
+itsdangerous>=2.1

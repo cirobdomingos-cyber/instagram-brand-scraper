@@ -1,22 +1,24 @@
 """
-Auth: Google ID token verification + email allowlist.
+Auth: Google ID token verification + email allowlist + session cookies.
 
-Two modes, mirroring reroot's pattern:
-  REAL  — GOOGLE_CLIENT_ID is set. Frontend uses GSI, sends ID token in
-          Authorization header. Backend verifies signature against Google's
-          public keys, then checks email against ALLOWED_EMAILS.
-  MOCK  — GOOGLE_CLIENT_ID unset. Backend trusts X-Mock-Email header iff
-          that email is in ALLOWED_EMAILS. Frictionless local dev; fails
-          closed in prod (mock mode is gated by GOOGLE_CLIENT_ID being
-          unset, so misconfiguring prod is the only way to enable it).
+Cookie-first, header-fallback. The browser holds a signed session cookie
+that's auto-sent on every request (including <img src="/data/...">), so
+images and other static brand data can be auth-gated without the SPA
+having to wrap fetch.
 
-ALLOWED_EMAILS is a comma-separated env var. Empty/unset = nobody allowed.
-The owner email is auto-included so they can't lock themselves out.
+Modes:
+  REAL  — GOOGLE_CLIENT_ID set. POST /api/auth/session with a Google ID
+          token; backend verifies signature against Google's public keys,
+          checks the email against ALLOWED_EMAILS, then writes a session.
+  MOCK  — GOOGLE_CLIENT_ID unset. POST /api/auth/session with X-Mock-Email
+          header; backend trusts it iff allowlisted. Mock mode requires
+          the header explicitly — no silent fallback to owner — so a prod
+          deploy that forgets GOOGLE_CLIENT_ID returns 401 instead of
+          being open.
 
-Usage in FastAPI routes:
-    @app.post("/scrape")
-    async def scrape(user: User = Depends(require_user)):
-        ...
+ALLOWED_EMAILS env var seeds the allowlist on first boot. After that the
+allowlist file is canonical (managed by app.allowlist). OWNER_EMAIL is
+always allowed in code.
 """
 from __future__ import annotations
 
@@ -24,7 +26,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from google.auth.transport import requests as g_requests
 from google.oauth2 import id_token as g_id_token
 
@@ -36,7 +38,6 @@ OWNER_EMAIL = os.getenv("OWNER_EMAIL", "ciro.b.domingos@gmail.com").strip().lowe
 
 
 def _allowed_emails() -> set[str]:
-    """Live read — the file is the source of truth, env is only the seed."""
     return allowlist.all_allowed_emails(OWNER_EMAIL)
 
 
@@ -55,20 +56,21 @@ class User:
     picture: str
 
 
-# Cached request adapter — google-auth reuses the underlying HTTP session.
 _g_request = g_requests.Request()
 
 
 def _verify_google_token(token: str) -> dict:
-    """Returns the verified token payload, or raises ValueError."""
     return g_id_token.verify_oauth2_token(token, _g_request, GOOGLE_CLIENT_ID)
 
 
-async def require_user(
-    authorization: Optional[str] = Header(default=None),
-    x_mock_email: Optional[str] = Header(default=None),
+async def verify_credentials(
+    authorization: Optional[str], x_mock_email: Optional[str]
 ) -> User:
-    """FastAPI dependency. Returns User on success, raises 401/403 otherwise."""
+    """
+    Validate the supplied credentials. Used both directly by /api/auth/session
+    (to start a session) and as the header-fallback path inside require_user.
+    Raises HTTPException on auth failure.
+    """
     allowed = _allowed_emails()
 
     if is_real_mode():
@@ -103,8 +105,6 @@ async def require_user(
         )
 
     # ── MOCK MODE ──
-    # Require the header explicitly. No silent fallback to owner — a prod
-    # deploy that forgets GOOGLE_CLIENT_ID would otherwise be wide open.
     email = (x_mock_email or "").strip().lower()
     if not email:
         raise HTTPException(
@@ -119,8 +119,51 @@ async def require_user(
     return User(email=email, name=email.split("@")[0], picture="")
 
 
+def _user_from_session(session: dict) -> Optional[User]:
+    """Re-hydrate User from session data. Returns None if email isn't allowlisted."""
+    email = (session.get("email") or "").strip().lower()
+    if not email or email not in _allowed_emails():
+        return None
+    return User(
+        email=email,
+        name=session.get("name") or email,
+        picture=session.get("picture") or "",
+    )
+
+
+def write_session(request: Request, user: User) -> None:
+    request.session["email"] = user.email
+    request.session["name"] = user.name
+    request.session["picture"] = user.picture
+
+
+def clear_session(request: Request) -> None:
+    request.session.clear()
+
+
+async def require_user(
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+    x_mock_email: Optional[str] = Header(default=None),
+) -> User:
+    """
+    Auth dependency. Cookie first (cheap, no JWT verify). If no cookie,
+    fall back to verifying headers — so curl/scripts still work — and
+    refresh the session so subsequent same-origin requests (including
+    <img src="/data/...">) ride the cookie.
+    """
+    user = _user_from_session(request.session)
+    if user:
+        return user
+    # Stale or missing session — try header path.
+    if request.session:
+        request.session.clear()
+    user = await verify_credentials(authorization, x_mock_email)
+    write_session(request, user)
+    return user
+
+
 async def require_admin(user: User = Depends(require_user)) -> User:
-    """Owner-only routes."""
     if not is_admin(user.email):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

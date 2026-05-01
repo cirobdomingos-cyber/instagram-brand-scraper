@@ -40,11 +40,14 @@ const state = {
 const API = {
   async _fetch(path, opts = {}) {
     const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+    // authToken is only set during the sign-in handshake — it's exchanged
+    // for a session cookie at /api/auth/session and then forgotten. Every
+    // subsequent request rides the cookie (same-origin, sent automatically).
     if (state.authToken) {
       if (state.config?.mock_mode) headers["X-Mock-Email"] = state.authToken;
       else headers["Authorization"] = `Bearer ${state.authToken}`;
     }
-    const r = await fetch(path, { ...opts, headers });
+    const r = await fetch(path, { credentials: "same-origin", ...opts, headers });
     if (!r.ok) {
       let msg = `${r.status} ${r.statusText}`;
       try { const body = await r.json(); msg = body.detail || msg; } catch {}
@@ -54,6 +57,8 @@ const API = {
   },
   config()                                 { return this._fetch("/api/config"); },
   me()                                     { return this._fetch("/api/me"); },
+  sessionLogin()                           { return this._fetch("/api/auth/session", { method: "POST" }); },
+  sessionLogout()                          { return this._fetch("/api/auth/session", { method: "DELETE" }); },
   brands()                                 { return this._fetch("/api/brands"); },
   scrape(handle, posts)                    { return this._fetch("/api/scrape",   { method: "POST", body: JSON.stringify({ handle, posts }) }); },
   brand(handle)                            { return this._fetch(`/api/brand/${encodeURIComponent(handle)}`); },
@@ -103,7 +108,10 @@ function renderShell(content) {
             h("span", { class: "text-slate-600" }, state.user.email),
             h("button", {
               class: "text-slate-500 hover:text-slate-900 text-xs",
-              onclick: () => { state.user = null; state.authToken = null; renderSignIn(); },
+              onclick: async () => {
+                try { await API.sessionLogout(); } catch {}
+                state.user = null; state.authToken = null; renderSignIn();
+              },
             }, "sign out"),
           ])
         : null,
@@ -134,8 +142,9 @@ function renderSignIn() {
         if (!email) return;
         state.authToken = email;
         try {
-          const me = await API.me();
+          const me = await API.sessionLogin();  // exchanges header for cookie
           state.user = me;
+          state.authToken = null;               // cookie now does the work
           renderHome();
         } catch (e) {
           errBox.textContent = e.message;
@@ -166,8 +175,9 @@ function mountGoogleButton(host) {
         if (!response.credential) return;
         state.authToken = response.credential;
         try {
-          const me = await API.me();
+          const me = await API.sessionLogin();  // exchanges JWT for cookie
           state.user = me;
+          state.authToken = null;
           renderHome();
         } catch (e) {
           alert("Sign-in failed: " + e.message);
@@ -677,6 +687,15 @@ function renderResult(host, r, handle) {
   } catch (e) {
     document.body.innerHTML = `<p class="p-6 text-red-600">Bootstrap failed: ${e.message}</p>`;
     return;
+  }
+  // If a valid session cookie already exists, skip the sign-in screen.
+  try {
+    const me = await API.me();
+    state.user = me;
+    renderHome();
+    return;
+  } catch {
+    // No session — fall through to sign-in.
   }
   renderSignIn();
 })();
