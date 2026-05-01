@@ -61,6 +61,9 @@ const API = {
   generate(handle, asset_type, audience_or_goal, constraints) {
     return this._fetch("/api/generate", { method: "POST", body: JSON.stringify({ handle, asset_type, audience_or_goal, constraints }) });
   },
+  adminList()                              { return this._fetch("/api/admin/allowlist"); },
+  adminAdd(email)                          { return this._fetch("/api/admin/allowlist", { method: "POST", body: JSON.stringify({ email }) }); },
+  adminRemove(email)                       { return this._fetch(`/api/admin/allowlist/${encodeURIComponent(email)}`, { method: "DELETE" }); },
 };
 
 // ── Markdown rendering — minimal, no deps ──
@@ -203,22 +206,103 @@ async function renderHome() {
     if (!brands.length) {
       list.appendChild(h("p", { class: "text-slate-500 text-sm col-span-full" },
         "No brands yet. Scrape one above."));
-      return;
-    }
-    for (const b of brands) {
-      list.appendChild(h("button", {
-        class: "text-left bg-white rounded-lg shadow p-4 hover:shadow-md transition",
-        onclick: () => openBrand(b.handle),
-      }, [
-        h("div", { class: "font-semibold" }, "@" + b.handle),
-        h("div", { class: "text-xs text-slate-500" }, b.fullName || ""),
-        h("div", { class: "text-xs text-slate-400 mt-2" },
-          `${(b.followers || 0).toLocaleString()} followers · ${b.post_count} posts scraped`),
-      ]));
+    } else {
+      for (const b of brands) {
+        list.appendChild(h("button", {
+          class: "text-left bg-white rounded-lg shadow p-4 hover:shadow-md transition",
+          onclick: () => openBrand(b.handle),
+        }, [
+          h("div", { class: "font-semibold" }, "@" + b.handle),
+          h("div", { class: "text-xs text-slate-500" }, b.fullName || ""),
+          h("div", { class: "text-xs text-slate-400 mt-2" },
+            `${(b.followers || 0).toLocaleString()} followers · ${b.post_count} posts scraped`),
+        ]));
+      }
     }
   } catch (e) {
     list.innerHTML = `<p class="text-red-600 text-sm">${e.message}</p>`;
   }
+
+  if (state.user?.is_admin) {
+    wrapper.appendChild(await renderAdminCard());
+  }
+}
+
+async function renderAdminCard() {
+  const card = h("div", { class: "bg-white rounded-xl shadow p-5 mt-8" }, []);
+  card.appendChild(h("h2", { class: "font-semibold mb-1" }, "Admin · Access control"));
+  card.appendChild(h("p", { class: "text-xs text-slate-500 mb-4" },
+    "Anyone on this list can sign in. The owner is always allowed and can't be removed."));
+
+  const listHost = h("div", { class: "mb-4" }, [h("p", { class: "text-slate-500 text-sm" }, "Loading…")]);
+  card.appendChild(listHost);
+
+  const input = h("input", {
+    type: "email",
+    class: "flex-1 border rounded-l px-3 py-2 text-sm",
+    placeholder: "alice@example.com",
+  });
+  const errBox = h("p", { class: "text-xs text-red-600 mt-2 hidden" });
+  const addBtn = h("button", {
+    class: "bg-slate-900 text-white px-4 py-2 rounded-r text-sm hover:bg-slate-700 disabled:opacity-50",
+    onclick: async () => {
+      const email = input.value.trim();
+      if (!email) return;
+      addBtn.disabled = true;
+      errBox.classList.add("hidden");
+      try {
+        const data = await API.adminAdd(email);
+        input.value = "";
+        renderAllowlistEntries(listHost, data);
+      } catch (e) {
+        errBox.textContent = e.message;
+        errBox.classList.remove("hidden");
+      } finally {
+        addBtn.disabled = false;
+      }
+    },
+  }, "Add");
+  card.appendChild(h("div", { class: "flex" }, [input, addBtn]));
+  card.appendChild(errBox);
+
+  try {
+    const data = await API.adminList();
+    renderAllowlistEntries(listHost, data);
+  } catch (e) {
+    listHost.innerHTML = `<p class="text-red-600 text-sm">${e.message}</p>`;
+  }
+  return card;
+}
+
+function renderAllowlistEntries(host, data) {
+  host.innerHTML = "";
+  const rows = [
+    h("div", { class: "flex items-center py-2 border-b text-sm" }, [
+      h("div", { class: "flex-1 font-medium" }, data.owner),
+      h("div", { class: "text-xs text-slate-400 mr-3" }, "owner"),
+      h("div", { class: "text-xs text-slate-300 w-16 text-right" }, "—"),
+    ]),
+  ];
+  if (!data.entries.length) {
+    rows.push(h("p", { class: "text-xs text-slate-400 mt-3" }, "No additional users yet."));
+  }
+  for (const e of data.entries) {
+    rows.push(h("div", { class: "flex items-center py-2 border-b text-sm" }, [
+      h("div", { class: "flex-1" }, e.email),
+      h("div", { class: "text-xs text-slate-400 mr-3" }, e.added_at?.slice(0, 10) || ""),
+      h("button", {
+        class: "text-xs text-red-600 hover:underline w-16 text-right",
+        onclick: async () => {
+          if (!confirm(`Revoke access for ${e.email}?`)) return;
+          try {
+            const data2 = await API.adminRemove(e.email);
+            renderAllowlistEntries(host, data2);
+          } catch (err) { alert(err.message); }
+        },
+      }, "remove"),
+    ]));
+  }
+  for (const r of rows) host.appendChild(r);
 }
 
 function renderScrapeCard() {

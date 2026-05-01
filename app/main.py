@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth, generator, scraper, storage
+from . import allowlist, auth, generator, scraper, storage
 
 
 log = logging.getLogger("uvicorn.error")
@@ -84,7 +84,46 @@ def api_config():
 
 @app.get("/api/me")
 def api_me(user: auth.User = Depends(auth.require_user)):
-    return {"email": user.email, "name": user.name, "picture": user.picture}
+    return {
+        "email": user.email,
+        "name": user.name,
+        "picture": user.picture,
+        "is_admin": auth.is_admin(user.email),
+    }
+
+
+# ── Admin: allowlist management ──
+class AllowlistAddRequest(BaseModel):
+    email: str = Field(..., max_length=200)
+
+
+def _allowlist_payload() -> dict:
+    return {
+        "owner": auth.OWNER_EMAIL,
+        "entries": allowlist.get_entries(),
+    }
+
+
+@app.get("/api/admin/allowlist")
+def api_admin_list(user: auth.User = Depends(auth.require_admin)):
+    return _allowlist_payload()
+
+
+@app.post("/api/admin/allowlist")
+def api_admin_add(req: AllowlistAddRequest, user: auth.User = Depends(auth.require_admin)):
+    try:
+        allowlist.add(req.email, added_by=user.email)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _allowlist_payload()
+
+
+@app.delete("/api/admin/allowlist/{email}")
+def api_admin_delete(email: str, user: auth.User = Depends(auth.require_admin)):
+    if email.strip().lower() == auth.OWNER_EMAIL:
+        raise HTTPException(status_code=400, detail="cannot remove the owner")
+    allowlist.remove(email)
+    return _allowlist_payload()
 
 
 @app.get("/api/brands")
@@ -235,9 +274,14 @@ async def api_extract_dna(handle: str, user: auth.User = Depends(auth.require_us
         handle = storage.normalize_handle(handle)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip().strip('"').strip("'")
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
+    if not api_key.startswith("sk-ant-"):
+        raise HTTPException(
+            status_code=500,
+            detail=f"ANTHROPIC_API_KEY looks malformed (starts with {api_key[:7]!r}, expected 'sk-ant-')",
+        )
     client = AsyncAnthropic(api_key=api_key)
     log.info(f"extract DNA @{handle} by {user.email}")
     try:

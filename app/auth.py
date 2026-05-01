@@ -24,9 +24,11 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
-from fastapi import Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from google.auth.transport import requests as g_requests
 from google.oauth2 import id_token as g_id_token
+
+from . import allowlist
 
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
@@ -34,11 +36,12 @@ OWNER_EMAIL = os.getenv("OWNER_EMAIL", "ciro.b.domingos@gmail.com").strip().lowe
 
 
 def _allowed_emails() -> set[str]:
-    raw = os.getenv("ALLOWED_EMAILS", "")
-    emails = {e.strip().lower() for e in raw.split(",") if e.strip()}
-    if OWNER_EMAIL:
-        emails.add(OWNER_EMAIL)
-    return emails
+    """Live read — the file is the source of truth, env is only the seed."""
+    return allowlist.all_allowed_emails(OWNER_EMAIL)
+
+
+def is_admin(email: str) -> bool:
+    return email.strip().lower() == OWNER_EMAIL
 
 
 def is_real_mode() -> bool:
@@ -114,3 +117,13 @@ async def require_user(
             detail=f"{email} is not on the allowlist",
         )
     return User(email=email, name=email.split("@")[0], picture="")
+
+
+async def require_admin(user: User = Depends(require_user)) -> User:
+    """Owner-only routes."""
+    if not is_admin(user.email):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="admin only",
+        )
+    return user
