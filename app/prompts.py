@@ -95,7 +95,11 @@ ASSET_FORMATS: dict[str, str] = {
 }
 
 
-BRAND_DNA_PROMPT = """\
+# Split into a static schema preamble (never formatted — contains literal
+# JSON braces) and a dynamic data tail (str.format()'d with the scrape).
+# Joining them at call site is what keeps .format() from choking on the
+# literal `{` in the JSON example.
+BRAND_DNA_INSTRUCTIONS = """\
 Extract the BRAND_DNA from the scrape attached as JSON + images.
 
 Return ONLY valid JSON (no markdown fence, no preamble) with this shape:
@@ -110,14 +114,14 @@ Return ONLY valid JSON (no markdown fence, no preamble) with this shape:
     "brand_stage": "DTC startup | established | personal | institutional"
   },
   "visual_system": {
-    "dominant_colors_hex": ["#RRGGBB", ...],
+    "dominant_colors_hex": ["#RRGGBB", "..."],
     "typography_mood": "...",
     "photography_style": "...",
     "editing_treatment": "...",
     "recurring_motifs": ["..."]
   },
   "voice": {
-    "languages": ["pt-BR", "en", ...],
+    "languages": ["pt-BR", "en"],
     "register": "casual | formal | slangy | playful | clinical | ...",
     "sentence_rhythm": "...",
     "emoji_punctuation_conventions": "...",
@@ -136,11 +140,14 @@ Return ONLY valid JSON (no markdown fence, no preamble) with this shape:
   "commerce_signals": {
     "offering": "...",
     "price_tier_hint": "...",
-    "conversion_mechanics": ["link in bio", "DM", "WhatsApp", ...],
+    "conversion_mechanics": ["link in bio", "DM", "WhatsApp"],
     "posting_cadence": "..."
   },
   "gaps_flagged": ["..."]
 }
+"""
+
+BRAND_DNA_DATA_TAIL = """\
 
 The scrape data is below.
 

@@ -167,7 +167,7 @@ async def extract_brand_dna(client: AsyncAnthropic, handle: str) -> dict:
 
     text_block = {
         "type": "text",
-        "text": prompts.BRAND_DNA_PROMPT.format(
+        "text": prompts.BRAND_DNA_INSTRUCTIONS + prompts.BRAND_DNA_DATA_TAIL.format(
             profile_json=json.dumps(_slim_profile(profile), ensure_ascii=False, indent=2),
             manifest_json=json.dumps(manifest, ensure_ascii=False, indent=2),
             n_posts=len(slim_posts),
