@@ -159,6 +159,49 @@ MANIFEST (summary stats):
 
 POSTS (top {n_posts} by engagement, then most recent):
 {posts_json}
+
+VISUAL CATALOG ({n_images} images, one line each — use this to ground every
+visual_system claim. Cite specific shortcodes when stating a recurring motif):
+{catalog_summary}
+"""
+
+
+# Per-image cataloger prompt — short, structured, Haiku-friendly.
+IMAGE_CATALOG_PROMPT = """\
+Analyze this Instagram post image. Return ONLY valid JSON (no markdown
+fence, no preamble).
+
+Schema:
+{
+  "subject": "one short sentence describing what's in the image",
+  "dominant_colors_hex": ["#RRGGBB", "#RRGGBB", "#RRGGBB"],
+  "layout": "close-up | flat-lay | portrait | landscape | text-heavy | product-shot | scene | quote-card | screenshot | other",
+  "mood": "warm | cool | vibrant | muted | high-contrast | soft | dramatic | clinical | playful | minimalist",
+  "on_screen_text": "verbatim text rendered ON the image (poster/sticker/quote). '' if none",
+  "has_human": true | false,
+  "has_product": true | false,
+  "design_quality": "low | medium | high",
+  "usable_for": ["instagram_carousel", "landing_page", ...]
+}
+
+usable_for: only include asset types where this image is genuinely usable
+as raw material. Choose from: instagram_carousel, instagram_story,
+instagram_reel_script, launch_post, landing_page, one_pager_pdf,
+email_campaign, brand_style_guide, ad_creative_set, brand_audit,
+logo_concepts.
+
+design_quality: low = amateur/blurry, medium = solid UGC, high =
+studio-quality or polished art direction. Be honest.
+"""
+
+
+# Asset prompt now references the catalog. Claude can cite specific
+# shortcodes in its output ("inspired by Cabc123's flat-lay…").
+ASSET_PROMPT_CATALOG_SUFFIX = """\
+
+VISUAL CATALOG (every available image, summarized — pick the ones that
+fit this asset and cite them by shortcode in your RATIONALE):
+{catalog_summary}
 """
 
 
@@ -177,6 +220,12 @@ BRAND_DNA:
 
 RECENT POSTS for evidence (cite shortcodes/URLs from these):
 {posts_json}
+
+VISUAL CATALOG ({n_images} images, one line each — pick the ones that
+strengthen this asset and cite them by shortcode in your RATIONALE.
+Images marked design_quality=high or matching the asset's usable_for
+list are especially useful):
+{catalog_summary}
 
 Return your output in this exact structure:
 

@@ -28,7 +28,7 @@ from typing import Optional
 
 from anthropic import AsyncAnthropic
 
-from . import prompts, storage
+from . import cataloger, prompts, storage
 
 
 # claude-sonnet-4-6 has the right balance: vision-capable, design-coherent,
@@ -38,10 +38,11 @@ from . import prompts, storage
 DEFAULT_MODEL = "claude-sonnet-4-6"
 DESIGN_MODEL = "claude-opus-4-7"  # use for logo_concepts / brand_style_guide
 
-# How many post images to include in the DNA call. More = better visual
-# grounding, but costs more tokens and slows the call. 6 is the sweet spot
-# in practice: profile pic + 5 top-engagement posts.
-N_IMAGES_FOR_DNA = 6
+# Image counts for each phase. We attach more now that the catalog gives
+# Claude a text-level overview of every image — the attached subset is
+# for direct visual grounding, not enumeration.
+N_IMAGES_FOR_DNA = 12
+N_IMAGES_FOR_ASSET = 5
 # How many post records (caption + metadata, no image) to include in the
 # DNA prompt. Top-engagement first, then a recency sample.
 N_POSTS_FOR_DNA_TEXT = 25
@@ -137,8 +138,10 @@ def _strip_json_fence(s: str) -> str:
 
 async def extract_brand_dna(client: AsyncAnthropic, handle: str) -> dict:
     """
-    Phase 1. Reads scrape from disk, calls Claude with profile + posts +
-    selected images, parses the returned JSON, caches it to brand_dna.json.
+    Phase 1. Reads scrape from disk, ensures the image catalog exists
+    (auto-builds with Haiku if not), calls Claude with profile + posts +
+    catalog summary + a curated image subset, parses the returned JSON,
+    caches it to brand_dna.json.
     """
     bdir = storage.brand_dir(handle)
     if not bdir.exists():
@@ -153,21 +156,20 @@ async def extract_brand_dna(client: AsyncAnthropic, handle: str) -> dict:
     posts = storage.read_json(bdir / "posts.json")
     manifest = storage.read_json(bdir / "manifest.json")
 
+    # ── Catalog every image first (cached) ──
+    catalog = await cataloger.build_catalog(client, handle)
+
     top_posts = _select_top_posts(posts, N_POSTS_FOR_DNA_TEXT)
     slim_posts = [_slim_post(p) for p in top_posts]
 
-    # Image selection: profile pic + top N posts by likes (skip those whose
-    # image file is missing — Apify CDN sometimes 403s us).
+    # Image selection now uses the catalog: profile pic + the N highest-
+    # engagement images, deduped per parent post (no two carousel children).
     image_blocks: list[dict] = []
     pp = _image_block(bdir / "profile_pic.jpg")
     if pp:
         image_blocks.append(pp)
-    image_posts = _select_top_posts(posts, N_IMAGES_FOR_DNA - 1)
-    for p in image_posts:
-        sc = p.get("shortCode") or p.get("shortcode") or p.get("id") or ""
-        if not sc:
-            continue
-        blk = _image_block(bdir / "images" / f"{sc}.jpg")
+    for entry in cataloger.pick_images_for_dna(catalog, n=N_IMAGES_FOR_DNA - 1):
+        blk = _image_block(bdir / entry["image_path"])
         if blk:
             image_blocks.append(blk)
         if len(image_blocks) >= N_IMAGES_FOR_DNA:
@@ -180,6 +182,8 @@ async def extract_brand_dna(client: AsyncAnthropic, handle: str) -> dict:
             manifest_json=json.dumps(manifest, ensure_ascii=False, indent=2),
             n_posts=len(slim_posts),
             posts_json=json.dumps(slim_posts, ensure_ascii=False, indent=2),
+            n_images=catalog.get("image_count", 0),
+            catalog_summary=cataloger.summarize_catalog(catalog),
         ),
         # Cache the long input — same handle's DNA call won't hit it again,
         # but if the owner re-runs (e.g. after a re-scrape) inside the 5-min
@@ -230,6 +234,7 @@ async def generate_asset(
     bdir = storage.brand_dir(handle)
     posts = storage.read_json(bdir / "posts.json")
     dna = await get_or_extract_brand_dna(client, handle)
+    catalog = await cataloger.build_catalog(client, handle)
 
     evidence_posts = [_slim_post(p) for p in _select_top_posts(posts, N_POSTS_FOR_ASSET)]
 
@@ -240,14 +245,24 @@ async def generate_asset(
         constraints=constraints or "(none)",
         brand_dna_json=json.dumps(dna, ensure_ascii=False, indent=2),
         posts_json=json.dumps(evidence_posts, ensure_ascii=False, indent=2),
+        n_images=catalog.get("image_count", 0),
+        catalog_summary=cataloger.summarize_catalog(catalog),
     )
+
+    # Attach a smart image subset — those flagged usable_for this asset
+    # type, prioritized by design_quality and engagement.
+    image_blocks: list[dict] = []
+    for entry in cataloger.pick_images_for_asset(catalog, asset_type, n=N_IMAGES_FOR_ASSET):
+        blk = _image_block(bdir / entry["image_path"])
+        if blk:
+            image_blocks.append(blk)
 
     response = await client.messages.create(
         model=_pick_model(asset_type),
         max_tokens=8192,
         system=[{"type": "text", "text": prompts.SYSTEM_PROMPT,
                  "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": prompt_text}],
+        messages=[{"role": "user", "content": image_blocks + [{"type": "text", "text": prompt_text}]}],
     )
 
     body = response.content[0].text

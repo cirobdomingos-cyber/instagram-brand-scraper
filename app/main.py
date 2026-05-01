@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import allowlist, auth, generator, scraper, storage
+from . import allowlist, auth, cataloger, generator, scraper, storage
 
 
 log = logging.getLogger("uvicorn.error")
@@ -198,11 +198,54 @@ def api_brand(handle: str, user: auth.User = Depends(auth.require_user)):
         raise HTTPException(status_code=404, detail=f"@{handle} not scraped yet")
     manifest = storage.read_json(bdir / "manifest.json")
     dna_path = bdir / "brand_dna.json"
+    catalog_path = bdir / "image_catalog.json"
+    catalog_summary = None
+    if catalog_path.exists():
+        try:
+            cat = storage.read_json(catalog_path)
+            layouts: dict[str, int] = {}
+            quality: dict[str, int] = {}
+            for img in cat.get("images", []):
+                layouts[img.get("layout", "?")] = layouts.get(img.get("layout", "?"), 0) + 1
+                quality[img.get("design_quality", "?")] = quality.get(img.get("design_quality", "?"), 0) + 1
+            catalog_summary = {
+                "image_count": cat.get("image_count", 0),
+                "cataloged_at": cat.get("cataloged_at"),
+                "by_layout": layouts,
+                "by_quality": quality,
+            }
+        except Exception:
+            catalog_summary = None
     return {
         "manifest": manifest,
         "brand_dna": storage.read_json(dna_path) if dna_path.exists() else None,
+        "catalog_summary": catalog_summary,
         "outputs": _list_outputs(bdir),
     }
+
+
+@app.post("/api/brand/{handle}/catalog")
+async def api_build_catalog(handle: str, user: auth.User = Depends(auth.require_user)):
+    """Force a fresh image catalog (re-runs Haiku on every image)."""
+    try:
+        handle = storage.normalize_handle(handle)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    bdir = storage.brand_dir(handle)
+    if not (bdir / "posts.json").exists():
+        raise HTTPException(status_code=404, detail=f"@{handle} not scraped yet")
+
+    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip().strip('"').strip("'")
+    if not api_key or not api_key.startswith("sk-ant-"):
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured or malformed")
+    client = AsyncAnthropic(api_key=api_key)
+    log.info(f"force-catalog @{handle} by {user.email}")
+    try:
+        cat = await cataloger.build_catalog(client, handle, force=True)
+    except Exception as e:
+        log.exception("catalog failed")
+        raise HTTPException(status_code=500, detail=f"catalog failed: {e}")
+    return {"image_count": cat["image_count"], "cataloged_at": cat["cataloged_at"]}
 
 
 def _list_outputs(bdir: Path) -> list[dict]:

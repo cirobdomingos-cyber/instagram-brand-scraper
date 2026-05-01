@@ -61,6 +61,7 @@ const API = {
   generate(handle, asset_type, audience_or_goal, constraints) {
     return this._fetch("/api/generate", { method: "POST", body: JSON.stringify({ handle, asset_type, audience_or_goal, constraints }) });
   },
+  buildCatalog(handle)                     { return this._fetch(`/api/brand/${encodeURIComponent(handle)}/catalog`, { method: "POST" }); },
   adminList()                              { return this._fetch("/api/admin/allowlist"); },
   adminAdd(email)                          { return this._fetch("/api/admin/allowlist", { method: "POST", body: JSON.stringify({ email }) }); },
   adminRemove(email)                       { return this._fetch(`/api/admin/allowlist/${encodeURIComponent(email)}`, { method: "DELETE" }); },
@@ -360,7 +361,7 @@ async function openBrand(handle) {
 }
 
 function renderBrand(handle, data) {
-  const { manifest, brand_dna, outputs } = data;
+  const { manifest, brand_dna, catalog_summary, outputs } = data;
   const ps = manifest.profile_summary || {};
   const wrapper = h("div", {});
   wrapper.appendChild(h("button", {
@@ -383,6 +384,43 @@ function renderBrand(handle, data) {
     ]),
   ]);
   wrapper.appendChild(header);
+
+  // Image catalog panel
+  const catCard = h("div", { class: "bg-white rounded-xl shadow p-5 mb-4" }, []);
+  catCard.appendChild(h("div", { class: "flex items-center justify-between mb-2" }, [
+    h("h2", { class: "font-semibold" }, "Image catalog"),
+    h("button", {
+      class: "text-xs text-slate-500 hover:text-slate-900",
+      onclick: async () => {
+        const status = catCard.querySelector("[data-cat-status]");
+        status.textContent = "Cataloging… (~$0.001/image, ~30s)";
+        try {
+          const r = await API.buildCatalog(handle);
+          status.textContent = `Done. Indexed ${r.image_count} images.`;
+          const fresh = await API.brand(handle);
+          state.currentBrand = fresh;
+          renderBrand(handle, fresh);
+        } catch (e) {
+          status.className = "text-xs text-red-600 mt-1";
+          status.textContent = e.message;
+        }
+      },
+    }, catalog_summary ? "re-catalog" : "build catalog"),
+  ]));
+  if (catalog_summary) {
+    catCard.appendChild(h("div", { class: "text-xs text-slate-600" }, [
+      h("span", { class: "font-medium" }, `${catalog_summary.image_count} images indexed `),
+      h("span", { class: "text-slate-400" },
+        `(${Object.entries(catalog_summary.by_quality).map(([k,v]) => `${v} ${k}`).join(", ")})`),
+    ]));
+    catCard.appendChild(h("div", { class: "text-xs text-slate-500 mt-1" },
+      "Layouts: " + Object.entries(catalog_summary.by_layout).map(([k,v]) => `${k}×${v}`).join(", ")));
+  } else {
+    catCard.appendChild(h("p", { class: "text-xs text-slate-500" },
+      "Not built yet. Will auto-build on first DNA extract, or click 'build catalog'."));
+  }
+  catCard.appendChild(h("p", { class: "text-xs text-slate-500 mt-2", "data-cat-status": "" }));
+  wrapper.appendChild(catCard);
 
   // BRAND_DNA panel
   const dnaCard = h("div", { class: "bg-white rounded-xl shadow p-5 mb-4" }, []);
