@@ -16,16 +16,18 @@ ALLOWED_EMAILS controls who can hit any /api route except /api/config.
 """
 from __future__ import annotations
 
+import io
 import logging
 import os
 import secrets
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from anthropic import AsyncAnthropic
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
@@ -271,6 +273,137 @@ def api_brand(handle: str, user: auth.User = Depends(auth.require_user)):
         "catalog_summary": catalog_summary,
         "outputs": _list_outputs(bdir),
     }
+
+
+@app.get("/api/brand/{handle}/download")
+def api_download(
+    handle: str,
+    mode: str = Query("curated", pattern="^(curated|full)$"),
+    samples: int = Query(10, ge=3, le=50),
+    user: auth.User = Depends(auth.require_user),
+):
+    """
+    Download a brand bundle as a ZIP for handoff to another AI tool.
+
+    mode=curated (default): all JSON files + a curated sample of `samples`
+    images selected for design diversity (max 2 per layout, no carousel
+    siblings, sorted by quality + usable-for breadth + engagement).
+    Falls back to top-by-engagement if the catalog isn't built yet.
+
+    mode=full: all JSON files + every downloaded image. Larger and
+    less curated; useful for archival or when you want to pick yourself.
+
+    Generated outputs (asset.md / asset.html / asset.svg) are always
+    included.
+    """
+    try:
+        handle = storage.normalize_handle(handle)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    bdir = storage.brand_dir(handle)
+    if not (bdir / "manifest.json").exists():
+        raise HTTPException(status_code=404, detail=f"@{handle} not scraped yet")
+
+    catalog: Optional[dict] = None
+    cat_path = bdir / "image_catalog.json"
+    if cat_path.exists():
+        try:
+            catalog = storage.read_json(cat_path)
+        except Exception:
+            catalog = None
+
+    # Build the ZIP in memory — single brand, max ~100MB. Streaming would
+    # be overkill at this scale and complicate the curation logic.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        # JSON metadata + profile pic — always included.
+        for name in ("profile.json", "posts.json", "manifest.json",
+                     "brand_dna.json", "image_catalog.json"):
+            p = bdir / name
+            if p.exists():
+                zf.write(p, arcname=name)
+        pp = bdir / "profile_pic.jpg"
+        if pp.exists():
+            zf.write(pp, arcname="profile_pic.jpg")
+
+        # Image selection
+        image_paths: list[Path] = []
+        if mode == "full":
+            img_dir = bdir / "images"
+            if img_dir.exists():
+                image_paths = sorted(p for p in img_dir.iterdir() if p.is_file())
+        else:
+            image_paths = _curated_image_paths(bdir, catalog, samples)
+
+        for path in image_paths:
+            zf.write(path, arcname=f"images/{path.name}")
+
+        # Generated outputs — always included, full tree under output/
+        out_dir = bdir / "output"
+        if out_dir.exists():
+            for f in out_dir.rglob("*"):
+                if f.is_file():
+                    rel = f.relative_to(bdir)
+                    zf.write(f, arcname=str(rel).replace("\\", "/"))
+
+        # Tiny manifest of what's in the bundle so the recipient AI knows
+        # the layout without having to spelunk.
+        bundle_meta = {
+            "handle": handle,
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "mode": mode,
+            "samples": len(image_paths) if mode == "curated" else None,
+            "image_count_in_zip": len(image_paths),
+            "has_catalog": catalog is not None,
+            "has_brand_dna": (bdir / "brand_dna.json").exists(),
+        }
+        zf.writestr("BUNDLE_META.json",
+                    storage.json_dumps_pretty(bundle_meta) if hasattr(storage, "json_dumps_pretty")
+                    else __import__("json").dumps(bundle_meta, indent=2))
+
+    buf.seek(0)
+    log.info(f"download {mode} for @{handle} by {user.email}: "
+             f"{len(image_paths)} images, {buf.getbuffer().nbytes} bytes")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    filename = f"{handle}_{mode}_{ts}.zip"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _curated_image_paths(bdir: Path, catalog: Optional[dict], n: int) -> list[Path]:
+    """Pick `n` representative images for the curated bundle."""
+    if catalog and catalog.get("images"):
+        picks = cataloger.pick_curated_images(catalog, n=n)
+        out: list[Path] = []
+        for img in picks:
+            p = bdir / img["image_path"]
+            if p.exists():
+                out.append(p)
+        return out
+    # Fallback: top-N by likes from posts.json + image existence.
+    posts_path = bdir / "posts.json"
+    if not posts_path.exists():
+        return []
+    try:
+        posts = storage.read_json(posts_path)
+    except Exception:
+        return []
+    posts_sorted = sorted(posts, key=lambda p: p.get("likesCount") or 0, reverse=True)
+    img_dir = bdir / "images"
+    out = []
+    for p in posts_sorted:
+        sc = p.get("shortCode") or p.get("shortcode") or p.get("id") or ""
+        if not sc:
+            continue
+        path = img_dir / f"{sc}.jpg"
+        if path.exists():
+            out.append(path)
+        if len(out) >= n:
+            break
+    return out
 
 
 @app.post("/api/brand/{handle}/catalog")

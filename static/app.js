@@ -432,6 +432,9 @@ function renderBrand(handle, data) {
   catCard.appendChild(h("p", { class: "text-xs text-slate-500 mt-2", "data-cat-status": "" }));
   wrapper.appendChild(catCard);
 
+  // Download bundle
+  wrapper.appendChild(renderDownloadCard(handle));
+
   // Image gallery
   const galleryCard = h("div", { class: "bg-white rounded-xl shadow p-5 mb-4" }, []);
   galleryCard.appendChild(h("div", { class: "flex items-center justify-between mb-3" }, [
@@ -501,6 +504,58 @@ function renderBrand(handle, data) {
   }
 
   renderShell(wrapper);
+}
+
+function renderDownloadCard(handle) {
+  const card = h("div", { class: "bg-white rounded-xl shadow p-5 mb-4" }, []);
+  card.appendChild(h("h2", { class: "font-semibold mb-1" }, "Download bundle"));
+  card.appendChild(h("p", { class: "text-xs text-slate-500 mb-3" },
+    "ZIP with all JSON metadata + a sample of images. Drop into Claude Projects, " +
+    "ChatGPT, etc. for design work."));
+
+  const curatedRadio = h("input", { type: "radio", name: `dl-${handle}`, value: "curated", checked: true });
+  const fullRadio = h("input", { type: "radio", name: `dl-${handle}`, value: "full" });
+  const samplesInput = h("input", {
+    type: "number", min: "3", max: "50", value: "10",
+    class: "w-16 border rounded px-2 py-1 text-sm",
+  });
+
+  const samplesRow = h("label", { class: "flex items-center gap-2 text-sm mb-1 cursor-pointer" }, [
+    curatedRadio,
+    h("span", { class: "font-medium" }, "Curated"),
+    samplesInput,
+    h("span", { class: "text-xs text-slate-500" },
+      "representative samples — diverse layouts, picked by quality + engagement"),
+  ]);
+  const fullRow = h("label", { class: "flex items-center gap-2 text-sm mb-3 cursor-pointer" }, [
+    fullRadio,
+    h("span", { class: "font-medium" }, "Full library"),
+    h("span", { class: "text-xs text-slate-500" },
+      "every downloaded image — bigger, less curated"),
+  ]);
+  // Disable samples input when full mode selected
+  const updateDisabled = () => { samplesInput.disabled = fullRadio.checked; };
+  curatedRadio.addEventListener("change", updateDisabled);
+  fullRadio.addEventListener("change", updateDisabled);
+
+  const btn = h("button", {
+    class: "bg-slate-900 text-white px-4 py-2 rounded text-sm hover:bg-slate-700",
+    onclick: () => {
+      const mode = fullRadio.checked ? "full" : "curated";
+      const samples = parseInt(samplesInput.value, 10) || 10;
+      const url = `/api/brand/${encodeURIComponent(handle)}/download?mode=${mode}&samples=${samples}`;
+      // Same-origin link with cookie auto-attached. Browser handles the
+      // download via Content-Disposition.
+      const a = document.createElement("a");
+      a.href = url;
+      a.click();
+    },
+  }, "Download ZIP");
+
+  card.appendChild(samplesRow);
+  card.appendChild(fullRow);
+  card.appendChild(btn);
+  return card;
 }
 
 async function loadGallery(handle, host, hasCatalog) {

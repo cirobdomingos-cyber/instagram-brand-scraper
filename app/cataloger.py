@@ -210,6 +210,41 @@ def pick_images_for_dna(catalog: dict, n: int = 12) -> list[dict]:
     return out
 
 
+def pick_curated_images(catalog: dict, n: int = 10) -> list[dict]:
+    """
+    Pick a diverse, design-ready sample for handing off to another AI tool.
+    Sort by (design_quality, usable_for breadth, engagement). Dedup parent
+    posts (no carousel siblings) and cap at 2 images per layout so the
+    sample doesn't end up as 10 flat-lays.
+    """
+    images = list(catalog.get("images", []))
+    if not images:
+        return []
+
+    def score(img: dict) -> tuple:
+        quality = {"high": 3, "medium": 2, "low": 0}.get(img.get("design_quality"), 1)
+        breadth = len(img.get("usable_for") or [])
+        return (quality, breadth, img.get("post_likes", 0))
+
+    images.sort(key=score, reverse=True)
+    layout_count: dict[str, int] = {}
+    seen_parents: set[str] = set()
+    out: list[dict] = []
+    for img in images:
+        parent = img["shortcode"].split("_")[0]
+        layout = img.get("layout", "?")
+        if parent in seen_parents:
+            continue
+        if layout_count.get(layout, 0) >= 2:
+            continue
+        out.append(img)
+        seen_parents.add(parent)
+        layout_count[layout] = layout_count.get(layout, 0) + 1
+        if len(out) >= n:
+            break
+    return out
+
+
 def pick_images_for_asset(catalog: dict, asset_type: str, n: int = 5) -> list[dict]:
     """Pick images most likely to strengthen this asset type."""
     images = list(catalog.get("images", []))
