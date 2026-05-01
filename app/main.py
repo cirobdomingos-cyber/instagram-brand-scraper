@@ -326,6 +326,18 @@ def api_download(
         if pp.exists():
             zf.write(pp, arcname="profile_pic.jpg")
 
+        # BRAND_DNA.md — human-readable rendering of brand_dna.json so
+        # the receiving AI gets a primer it can read directly without
+        # parsing JSON. Skipped if DNA hasn't been extracted yet.
+        dna_path = bdir / "brand_dna.json"
+        if dna_path.exists():
+            try:
+                dna = storage.read_json(dna_path)
+                md = generator.dna_to_markdown(dna, handle=handle)
+                zf.writestr("BRAND_DNA.md", md)
+            except Exception as e:
+                log.warning(f"failed to render BRAND_DNA.md for {handle}: {e}")
+
         # Image selection
         image_paths: list[Path] = []
         if mode == "full":

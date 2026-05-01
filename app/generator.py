@@ -296,6 +296,115 @@ async def generate_asset(
     }
 
 
+def dna_to_markdown(dna: dict, handle: str = "") -> str:
+    """
+    Render the structured BRAND_DNA as a human-readable Markdown brief.
+    Designed to drop straight into Claude Projects, ChatGPT, Cursor, etc.
+    as primer text for design work — keys are descriptive, prose is
+    skim-friendly, palette swatches are listed as code so they're easy
+    to copy.
+    """
+    if not dna:
+        return f"# BRAND_DNA · @{handle}\n\n(no DNA extracted yet)\n"
+
+    def _list(v) -> str:
+        if not v:
+            return "—"
+        if isinstance(v, list):
+            return ", ".join(str(x) for x in v if x is not None)
+        return str(v)
+
+    def _kv(d: dict, key: str, default: str = "—") -> str:
+        v = d.get(key)
+        return _list(v) if isinstance(v, list) else (str(v) if v else default)
+
+    ident = dna.get("identity") or {}
+    visual = dna.get("visual_system") or {}
+    voice = dna.get("voice") or {}
+    pillars = dna.get("content_pillars") or []
+    audience = dna.get("audience") or {}
+    commerce = dna.get("commerce_signals") or {}
+    gaps = dna.get("gaps_flagged") or []
+
+    lines: list[str] = []
+    lines.append(f"# BRAND_DNA · @{handle or ident.get('handle', '')}")
+    lines.append("")
+    lines.append(f"_Source: https://www.instagram.com/{handle}/_  ")
+    lines.append("")
+
+    lines.append("## Identity")
+    lines.append(f"- **Positioning:** {_kv(ident, 'positioning_one_liner')}")
+    lines.append(f"- **Category:** {_kv(ident, 'category')}")
+    lines.append(f"- **Brand stage:** {_kv(ident, 'brand_stage')}")
+    lines.append(f"- **Implicit competitors:** {_kv(ident, 'implicit_competitors')}")
+    lines.append("")
+
+    lines.append("## Visual system")
+    palette = visual.get("dominant_colors_hex") or []
+    lines.append(f"- **Palette:** {' '.join(f'`{c}`' for c in palette) if palette else '—'}")
+    lines.append(f"- **Typography mood:** {_kv(visual, 'typography_mood')}")
+    lines.append(f"- **Photography style:** {_kv(visual, 'photography_style')}")
+    lines.append(f"- **Editing treatment:** {_kv(visual, 'editing_treatment')}")
+    lines.append(f"- **Recurring motifs:** {_kv(visual, 'recurring_motifs')}")
+    lines.append("")
+
+    lines.append("## Voice")
+    lines.append(f"- **Languages:** {_kv(voice, 'languages')}")
+    lines.append(f"- **Register:** {_kv(voice, 'register')}")
+    lines.append(f"- **Sentence rhythm:** {_kv(voice, 'sentence_rhythm')}")
+    lines.append(f"- **Emoji/punctuation:** {_kv(voice, 'emoji_punctuation_conventions')}")
+    excerpts = voice.get("verbatim_excerpts") or []
+    if excerpts:
+        lines.append("")
+        lines.append("### Verbatim caption excerpts")
+        for ex in excerpts:
+            text = (str(ex) or "").strip().replace("\n", "\n> ")
+            if text:
+                lines.append(f"> {text}")
+                lines.append(">")
+    lines.append("")
+
+    lines.append("## Content pillars")
+    if pillars:
+        for i, pillar in enumerate(pillars, 1):
+            theme = pillar.get("theme") or "(unnamed)"
+            avg = pillar.get("avg_engagement")
+            urls = pillar.get("example_post_urls") or []
+            tail = ""
+            if avg:
+                tail += f" — avg engagement: {avg}"
+            if urls:
+                tail += f" — examples: {', '.join(urls)}"
+            lines.append(f"{i}. **{theme}**{tail}")
+    else:
+        lines.append("_None identified._")
+    lines.append("")
+
+    lines.append("## Audience")
+    lines.append(f"- **Inferred demo:** {_kv(audience, 'inferred_demo')}")
+    lines.append(f"- **Psychographic:** {_kv(audience, 'psychographic')}")
+    lines.append(f"- **Ick list:** {_kv(audience, 'ick_list')}")
+    eng = audience.get("engagement_rate_pct")
+    lines.append(f"- **Engagement rate:** {eng}%" if eng is not None else "- **Engagement rate:** —")
+    lines.append(f"- **Top-performing post type:** {_kv(audience, 'top_performing_post_type')}")
+    lines.append("")
+
+    lines.append("## Commerce signals")
+    lines.append(f"- **Offering:** {_kv(commerce, 'offering')}")
+    lines.append(f"- **Price tier hint:** {_kv(commerce, 'price_tier_hint')}")
+    lines.append(f"- **Conversion mechanics:** {_kv(commerce, 'conversion_mechanics')}")
+    lines.append(f"- **Posting cadence:** {_kv(commerce, 'posting_cadence')}")
+    lines.append("")
+
+    if gaps:
+        lines.append("## Gaps flagged")
+        for g in gaps:
+            lines.append(f"- {g}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def _extract_first_code_block(text: str, language: str) -> Optional[str]:
     """Pull a fenced ```lang ... ``` block out of the markdown body."""
     pat = re.compile(rf"```{language}\s*\n(.*?)\n```", re.DOTALL | re.IGNORECASE)
