@@ -31,14 +31,14 @@ creative set, brand audit.
 
 ```mermaid
 flowchart LR
-    U[Allowlisted user] -->|Google sign-in| SPA[Vanilla JS SPA]
-    SPA --> API[FastAPI]
-    API -->|@handle| APF[Apify Instagram actor]
-    APF -->|profile, posts, images| DISK[(Railway volume /data/handle)]
-    API -->|profile + top posts + images| DNA[Claude: extract BRAND_DNA]
-    DNA -->|brand_dna.json, cached| DISK
-    API -->|asset type + cached DNA| GEN[Claude: generate asset]
-    GEN -->|md / html / svg| DISK
+    U["Allowlisted user"] -->|"Google sign-in"| SPA["Vanilla JS SPA"]
+    SPA --> API["FastAPI"]
+    API -->|"handle"| APF["Apify Instagram actor"]
+    APF -->|"profile, posts, images"| DISK[("Railway volume, /data/handle")]
+    API -->|"profile, top posts, images"| DNA["Claude: extract BRAND_DNA"]
+    DNA -->|"brand_dna.json, cached"| DISK
+    API -->|"asset type, cached DNA"| GEN["Claude: generate asset"]
+    GEN -->|"md, html, svg"| DISK
     DISK --> SPA
 ```
 
