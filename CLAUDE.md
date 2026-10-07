@@ -58,5 +58,5 @@ uvicorn app.main:app --reload --port 8000
 - Worst case for a friend who scrapes 5 brands and generates 3 assets each: ~$0.50
 
 ## What this is NOT
-- Not the events scraper from `C:/repo/reroot/`. That one writes to a DB and extracts Curitiba events. This one is brand-marketing-only.
+- Not the events scraper from `<workspace>/reroot/`. That one writes to a DB and extracts Curitiba events. This one is brand-marketing-only.
 - Not a posting bot. We produce material; the user ships it.
